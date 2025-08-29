@@ -8,8 +8,8 @@ from pymodbus.payload import BinaryPayloadBuilder, BinaryPayloadDecoder
 
 import registers as REG
 
-BYTEORDER = Endian.Little
-WORDORDER = Endian.Big
+BYTEORDER = Endian.LITTLE
+WORDORDER = Endian.BIG
 
 
 class VSensorDriver:
