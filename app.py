@@ -8,8 +8,12 @@ import registers as REG
 from config import load_config
 from modbus_driver import VSensorDriver
 
+# ---- Globale Treiberinstanz ----
 CFG = load_config()
+DRV = VSensorDriver.from_cfg(CFG)
+DRV_LOCK = threading.Lock()
 
+# Gemeinsame Daten zwischen Polling-Thread und UI
 shared: dict[str, Any] = {
     "pressure_pa": None,
     "output_pct": None,
@@ -23,25 +27,29 @@ stop_event = threading.Event()
 
 
 def poller() -> None:
-    drv = VSensorDriver.from_cfg(CFG)
-    try:
-        drv.connect()
-        while not stop_event.is_set():
-            try:
-                shared["pressure_pa"] = drv.get_pressure_pa()
-                shared["output_pct"] = drv.get_output_percent()
-                shared["auto_sp"] = drv.get_auto_setpoint()
-                shared["mode"] = drv.get_mode()
-                shared["hb"] = drv.read_u16(REG.HEARTBEAT)
-                shared["status"] = "ok"
-            except TimeoutError:
-                shared["status"] = "timeout"
-            except Exception as exc:  # pragma: no cover - debugging
-                shared["status"] = f"err: {exc}"  # pragma: no cover
-            stop_event.wait(CFG["POLL_INTERVAL_SEC"])
-    finally:
-        drv.close()
+    """Hintergrundthread zum zyklischen Auslesen der Messwerte."""
+    while not stop_event.is_set():
+        try:
+            with DRV_LOCK:
+                shared["pressure_pa"] = DRV.get_pressure_pa()
+                shared["output_pct"] = DRV.get_output_percent()
+                shared["auto_sp"] = DRV.get_auto_setpoint()
+                shared["mode"] = DRV.get_mode()
+                shared["hb"] = DRV.read_u16(REG.HEARTBEAT)
+            shared["status"] = "ok"
+        except TimeoutError:
+            shared["status"] = "timeout"
+        except Exception as exc:  # pragma: no cover - debugging
+            shared["status"] = f"err: {exc}"  # pragma: no cover
+        stop_event.wait(CFG["POLL_INTERVAL_SEC"])
 
+
+# Beim Start einmalig verbinden
+try:
+    with DRV_LOCK:
+        DRV.connect()
+except Exception as exc:  # pragma: no cover - init failure
+    shared["status"] = f"init err: {exc}"  # pragma: no cover
 
 poll_thread = threading.Thread(target=poller, daemon=True)
 poll_thread.start()
@@ -59,13 +67,24 @@ app.layout = html.Div(
         html.Hr(),
         html.Div(
             [
-                dcc.Input(id="new_sp", type="number", placeholder="Auto-Sollwert"),
+                dcc.Input(
+                    id="new_sp",
+                    type="number",
+                    placeholder="Auto-Sollwert",
+                    min=0,
+                ),
                 html.Button("Setze Auto-Sollwert", id="btn_set_sp"),
             ]
         ),
         html.Div(
             [
-                dcc.Input(id="new_sp_hand", type="number", placeholder="Hand-Sollwert"),
+                dcc.Input(
+                    id="new_sp_hand",
+                    type="number",
+                    placeholder="Hand-Sollwert",
+                    min=0,
+                    max=100,
+                ),
                 html.Button("Setze Hand-Sollwert", id="btn_set_hand"),
             ]
         ),
@@ -79,7 +98,7 @@ app.layout = html.Div(
                         {"label": "OFF", "value": 3},
                         {"label": "HAND @Output", "value": 4},
                     ],
-                    placeholder="Modus wählen",
+                    value=1,  # Default: AUTO
                 ),
                 html.Button("Setze Modus", id="btn_set_mode"),
             ]
@@ -122,12 +141,16 @@ def update_view(_):
     prevent_initial_call=True,
 )
 def set_sp(_, val):
-    drv = VSensorDriver.from_cfg(CFG)
+    if val is None:
+        return 0
     try:
-        drv.connect()
-        drv.set_auto_setpoint(float(val))
-    finally:
-        drv.close()
+        with DRV_LOCK:
+            DRV.set_auto_setpoint(float(val))
+        shared["status"] = "write ok"
+    except TimeoutError:
+        shared["status"] = "timeout"
+    except Exception as exc:  # pragma: no cover - debugging
+        shared["status"] = f"err: {exc}"  # pragma: no cover
     return 0
 
 
@@ -138,12 +161,16 @@ def set_sp(_, val):
     prevent_initial_call=True,
 )
 def set_hand(_, val):
-    drv = VSensorDriver.from_cfg(CFG)
+    if val is None:
+        return 0
     try:
-        drv.connect()
-        drv.write_float(REG.HAND_SETPOINT_PERCENT, float(val))
-    finally:
-        drv.close()
+        with DRV_LOCK:
+            DRV.write_float(REG.HAND_SETPOINT_PERCENT, float(val))
+        shared["status"] = "write ok"
+    except TimeoutError:
+        shared["status"] = "timeout"
+    except Exception as exc:  # pragma: no cover - debugging
+        shared["status"] = f"err: {exc}"  # pragma: no cover
     return 0
 
 
@@ -154,12 +181,16 @@ def set_hand(_, val):
     prevent_initial_call=True,
 )
 def set_mode(_, val):
-    drv = VSensorDriver.from_cfg(CFG)
+    if val is None:
+        return 0
     try:
-        drv.connect()
-        drv.set_mode(int(val))
-    finally:
-        drv.close()
+        with DRV_LOCK:
+            DRV.set_mode(int(val))
+        shared["status"] = "write ok"
+    except TimeoutError:
+        shared["status"] = "timeout"
+    except Exception as exc:  # pragma: no cover - debugging
+        shared["status"] = f"err: {exc}"  # pragma: no cover
     return 0
 
 
@@ -173,3 +204,5 @@ if __name__ == "__main__":
     finally:
         stop_event.set()
         poll_thread.join()
+        with DRV_LOCK:
+            DRV.close()
