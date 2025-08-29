@@ -1,6 +1,6 @@
 import os
 import threading
-from typing import Any
+from typing import Any, Optional
 
 from dash import Dash, Input, Output, State, dcc, html
 
@@ -24,6 +24,8 @@ shared: dict[str, Any] = {
 }
 
 stop_event = threading.Event()
+start_guard = threading.Event()
+poll_thread: Optional[threading.Thread] = None
 
 
 def poller() -> None:
@@ -42,17 +44,6 @@ def poller() -> None:
         except Exception as exc:  # pragma: no cover - debugging
             shared["status"] = f"err: {exc}"  # pragma: no cover
         stop_event.wait(CFG["POLL_INTERVAL_SEC"])
-
-
-# Beim Start einmalig verbinden
-try:
-    with DRV_LOCK:
-        DRV.connect()
-except Exception as exc:  # pragma: no cover - init failure
-    shared["status"] = f"init err: {exc}"  # pragma: no cover
-
-poll_thread = threading.Thread(target=poller, daemon=True)
-poll_thread.start()
 
 app = Dash(__name__)
 app.layout = html.Div(
@@ -195,14 +186,30 @@ def set_mode(_, val):
 
 
 if __name__ == "__main__":
+    if start_guard.is_set():
+        raise RuntimeError("already started")
+    start_guard.set()
     try:
+        try:
+            with DRV_LOCK:
+                DRV.connect()
+        except (PermissionError, FileNotFoundError) as exc:
+            shared["status"] = f"port err: {exc}"
+        except Exception as exc:  # pragma: no cover - init failure
+            shared["status"] = f"init err: {exc}"  # pragma: no cover
+        else:
+            poll_thread = threading.Thread(target=poller, daemon=True)
+            poll_thread.start()
+
         app.run_server(
-            debug=True,
+            debug=False,
+            use_reloader=False,
             host=os.getenv("HOST", "127.0.0.1"),
             port=int(os.getenv("PORT_HTTP", "8050")),
         )
     finally:
         stop_event.set()
-        poll_thread.join()
+        if poll_thread is not None:
+            poll_thread.join()
         with DRV_LOCK:
             DRV.close()
