@@ -1,12 +1,28 @@
-## modbus
+# vsensor
 
-Dash-Anwendung zum Auslesen und Steuern eines V‑Sensors über Modbus.
+Wiederverwendbare Kommunikationsbibliothek für den CMR Controls V‑Sensor.
 
-### Start
+## Installation
 
+```bash
+pip install -e .
 ```
-python app.py
+
+## CLI
+
+```bash
+vsensor read telemetry
+vsensor set mode 1
 ```
 
-Die serielle Verbindung wird dabei nur einmal geöffnet; beim Import von
-`app.py` treten keine Nebenwirkungen auf.
+## Migration
+
+| Alt                              | Neu                               |
+|---------------------------------|-----------------------------------|
+| `registers`                     | `vsensor.registers`               |
+| `config.load_config()`          | `vsensor.config.Config.from_env()`|
+| `modbus_driver.VSensorDriver`   | `vsensor.VSensorClient`           |
+
+Die alte Oberfläche bleibt als Wrapper (`registers.py`, `config.py`, `modbus_driver.py`) erhalten, ist aber veraltet.
+
+Weitere Beispiele und die Dash‑App finden sich im Verzeichnis `apps/`.

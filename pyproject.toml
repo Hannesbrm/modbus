@@ -1,0 +1,28 @@
+[project]
+name = "vsensor"
+version = "0.1.0"
+description = "Reusable communication library for CMR V-Sensor"
+authors = [{name = "Unknown"}]
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "pymodbus>=3.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["vsensor"]
+exclude = ["apps"]
+
+[project.scripts]
+vsensor = "main:main"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

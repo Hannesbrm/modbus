@@ -1,17 +1,17 @@
 import os
 import threading
+from dataclasses import asdict
 from typing import Any, Optional
 
 from dash import Dash, Input, Output, State, dcc, html
 
-import registers as REG
-from config import load_config
-from modbus_driver import VSensorDriver
+from vsensor import registers as REG
+from vsensor.client import VSensorClient
+from vsensor.config import Config
 
 # ---- Globale Treiberinstanz ----
-CFG = load_config()
-DRV = VSensorDriver.from_cfg(CFG)
-DRV_LOCK = threading.Lock()
+CFG = asdict(Config.from_env())
+DRV = VSensorClient(Config(**CFG))
 
 # Gemeinsame Daten zwischen Polling-Thread und UI
 shared: dict[str, Any] = {
@@ -32,12 +32,11 @@ def poller() -> None:
     """Hintergrundthread zum zyklischen Auslesen der Messwerte."""
     while not stop_event.is_set():
         try:
-            with DRV_LOCK:
-                shared["pressure_pa"] = DRV.get_pressure_pa()
-                shared["output_pct"] = DRV.get_output_percent()
-                shared["auto_sp"] = DRV.get_auto_setpoint()
-                shared["mode"] = DRV.get_mode()
-                shared["hb"] = DRV.read_u16(REG.HEARTBEAT)
+            shared["pressure_pa"] = DRV.read_pressure()
+            shared["output_pct"] = DRV.read_output()
+            shared["auto_sp"] = DRV.read_auto_setpoint()
+            shared["mode"] = DRV.read_mode()
+            shared["hb"] = DRV.read_u16(REG.HEARTBEAT)
             shared["status"] = "ok"
         except TimeoutError:
             shared["status"] = "timeout"
@@ -328,8 +327,7 @@ def set_sp(_, val):
         shared["status"] = "invalid"
         return 0
     try:
-        with DRV_LOCK:
-            DRV.set_auto_setpoint(float(val))
+        DRV.set_auto_setpoint(float(val))
         shared["status"] = "write ok"
     except TimeoutError:
         shared["status"] = "timeout"
@@ -349,8 +347,7 @@ def set_hand(_, val):
         shared["status"] = "invalid"
         return 0
     try:
-        with DRV_LOCK:
-            DRV.write_float(REG.HAND_SETPOINT_PERCENT, float(val))
+        DRV.write_float(REG.HAND_SETPOINT_PERCENT, float(val))
         shared["status"] = "write ok"
     except TimeoutError:
         shared["status"] = "timeout"
@@ -388,21 +385,15 @@ def reconnect(_, port, slave, baud, parity, stopbits, ff):
     if poll_thread is not None:
         poll_thread.join()
 
-    with DRV_LOCK:
-        DRV.close()
-        DRV = VSensorDriver.from_cfg(cfg)
-        try:
-            DRV.connect()
-        except (PermissionError, FileNotFoundError) as exc:
-            shared["status"] = f"port err: {exc}"
-            poll_thread = None
-            stop_event = threading.Event()
-            return 0
-        except Exception as exc:  # pragma: no cover - init failure
-            shared["status"] = f"init err: {exc}"  # pragma: no cover
-            poll_thread = None
-            stop_event = threading.Event()
-            return 0
+    DRV.close()
+    DRV = VSensorClient(Config(**cfg))
+    try:
+        DRV.transport  # ensure connection is opened on init
+    except Exception as exc:  # pragma: no cover - init failure
+        shared["status"] = f"init err: {exc}"  # pragma: no cover
+        poll_thread = None
+        stop_event = threading.Event()
+        return 0
 
     stop_event = threading.Event()
     poll_thread = threading.Thread(target=poller, daemon=True)
@@ -423,8 +414,7 @@ def set_mode(_, val):
         shared["status"] = "invalid"
         return 0
     try:
-        with DRV_LOCK:
-            DRV.set_mode(int(val))
+        DRV.set_mode(int(val))
         shared["status"] = "write ok"
     except TimeoutError:
         shared["status"] = "timeout"
@@ -478,10 +468,7 @@ if __name__ == "__main__":
     start_guard.set()
     try:
         try:
-            with DRV_LOCK:
-                DRV.connect()
-        except (PermissionError, FileNotFoundError) as exc:
-            shared["status"] = f"port err: {exc}"
+            DRV.transport  # already connected
         except Exception as exc:  # pragma: no cover - init failure
             shared["status"] = f"init err: {exc}"  # pragma: no cover
         else:
@@ -499,5 +486,4 @@ if __name__ == "__main__":
         stop_event.set()
         if poll_thread is not None:
             poll_thread.join()
-        with DRV_LOCK:
-            DRV.close()
+        DRV.close()
