@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from pymodbus.constants import Endian
@@ -12,7 +13,7 @@ from . import registers as REG  # register constants are 1-based
 from .config import Config
 from .errors import VSensorError
 from .models import Mode, Telemetry
-from .transport import RTUTransport, Transport
+from .transport import FakeTransport, RTUTransport, Transport
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,12 @@ class VSensorClient:
 
     def __init__(self, cfg: Optional[Config] = None, transport: Optional[Transport] = None) -> None:
         self.cfg = cfg or Config.from_env()
-        self.transport = transport or RTUTransport(self.cfg)
+        if transport is not None:
+            self.transport = transport
+        elif os.getenv("VSENSOR_SIM") or os.getenv("VSENSOR_FAKE"):
+            self.transport = FakeTransport(self.cfg)
+        else:
+            self.transport = RTUTransport(self.cfg)
         ff = FLOAT_FORMATS.get(self.cfg.float_format, FLOAT_FORMATS[1])
         self.byteorder, self.wordorder = ff
 
