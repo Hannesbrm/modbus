@@ -8,7 +8,7 @@ from typing import Optional
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadBuilder, BinaryPayloadDecoder
 
-from . import registers as REG
+from . import registers as REG  # register constants are 1-based
 from .config import Config
 from .errors import VSensorError
 from .models import Mode, Telemetry
@@ -35,6 +35,7 @@ class VSensorClient:
 
     @staticmethod
     def _r(addr_1_based: int) -> int:
+        """Convert 1-based register address to 0-based."""
         return addr_1_based - 1
 
     # ---- Low level ----
