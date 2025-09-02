@@ -1,0 +1,90 @@
+"""Transport abstraction for Modbus communication."""
+
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Iterable, List
+
+from pymodbus.client import ModbusSerialClient
+from pymodbus.exceptions import ModbusException, ModbusIOException
+from pymodbus.framer.rtu_framer import ModbusRtuFramer
+
+from .config import Config
+from .errors import TimeoutError, TransportError
+
+logger = logging.getLogger(__name__)
+
+
+class Transport:
+    """Abstract base class for transport implementations."""
+
+    def read_holding_registers(self, address: int, count: int) -> List[int]:
+        raise NotImplementedError
+
+    def write_register(self, address: int, value: int) -> None:
+        raise NotImplementedError
+
+    def write_registers(self, address: int, values: Iterable[int]) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:  # pragma: no cover - default
+        """Close transport resources."""
+
+
+class RTUTransport(Transport):
+    """Serial RTU transport based on pymodbus."""
+
+    def __init__(self, cfg: Config) -> None:
+        self._client = ModbusSerialClient(
+            port=cfg.port,
+            baudrate=cfg.baudrate,
+            parity=cfg.parity,
+            stopbits=cfg.stopbits,
+            bytesize=cfg.bytesize,
+            timeout=cfg.timeout,
+            retries=2,
+            retry_on_empty=True,
+            retry_on_invalid=True,
+            close_comm_on_error=True,
+            framer=ModbusRtuFramer,  # type: ignore[arg-type]
+        )
+        self._slave_id = cfg.slave_id
+        self._lock = threading.Lock()
+        if not self._client.connect():
+            raise TransportError(f"Serial connection failed on {cfg.port}")
+
+    def _call(self, func, *args, **kwargs):
+        try:
+            result = func(*args, **kwargs, slave=self._slave_id)
+        except ModbusIOException as exc:
+            logger.debug("transport timeout: %s", exc)
+            raise TimeoutError("modbus timeout") from exc
+        except ModbusException as exc:
+            logger.debug("transport error: %s", exc)
+            raise TransportError(str(exc)) from exc
+        if result is None:
+            raise TimeoutError("modbus timeout")
+        if result.isError():
+            raise TransportError(str(result))
+        return result
+
+    def read_holding_registers(self, address: int, count: int) -> List[int]:
+        with self._lock:
+            rr = self._call(self._client.read_holding_registers, address=address, count=count)
+            return list(rr.registers)
+
+    def write_register(self, address: int, value: int) -> None:
+        with self._lock:
+            self._call(self._client.write_register, address=address, value=value)
+
+    def write_registers(self, address: int, values: Iterable[int]) -> None:
+        with self._lock:
+            self._call(self._client.write_registers, address=address, values=list(values))
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._client.close()
+            finally:
+                pass
