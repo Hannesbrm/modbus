@@ -17,8 +17,9 @@ def load_config() -> dict[str, Any]:
         "PARITY": os.getenv("VSENSOR_PARITY", "N"),
         "STOPBITS": _int("VSENSOR_STOPBITS", 1),
         "BYTESIZE": _int("VSENSOR_BYTESIZE", 8),
-        "TIMEOUT": float(os.getenv("VSENSOR_TIMEOUT", "1.0")),
+        "TIMEOUT": float(os.getenv("VSENSOR_TIMEOUT", "1.5")),
         "SLAVE_ID": _int("VSENSOR_SLAVE_ID", 1),
+        "FLOAT_FORMAT": _int("VSENSOR_FLOAT_FORMAT", 1),
         # App
         "POLL_INTERVAL_SEC": float(os.getenv("POLL_INTERVAL_SEC", "1.0")),
     }

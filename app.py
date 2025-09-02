@@ -49,12 +49,53 @@ app = Dash(__name__)
 app.layout = html.Div(
     [
         html.H2("V-Sensor Dashboard"),
+        html.Div(
+            [
+                dcc.Input(id="cfg_port", type="text", value=CFG["PORT"], placeholder="Port"),
+                dcc.Input(
+                    id="cfg_slave",
+                    type="number",
+                    value=CFG["SLAVE_ID"],
+                    placeholder="Slave-ID",
+                    min=1,
+                ),
+                dcc.Input(
+                    id="cfg_baud",
+                    type="number",
+                    value=CFG["BAUD"],
+                    placeholder="Baud",
+                    min=1200,
+                ),
+                dcc.Dropdown(
+                    id="cfg_parity",
+                    options=[{"label": p, "value": p} for p in ["N", "E", "O"]],
+                    value=CFG["PARITY"],
+                    clearable=False,
+                ),
+                dcc.Input(
+                    id="cfg_stopbits",
+                    type="number",
+                    value=CFG["STOPBITS"],
+                    placeholder="Stopbits",
+                    min=1,
+                    max=2,
+                ),
+                dcc.Dropdown(
+                    id="cfg_ff",
+                    options=[{"label": str(i), "value": i} for i in range(4)],
+                    value=CFG["FLOAT_FORMAT"],
+                    clearable=False,
+                ),
+                html.Button("Verbinden/Übernehmen", id="btn_connect"),
+            ]
+        ),
+        html.Div(["Status: ", html.Span(id="status")]),
+        html.Div(["Verbindung: ", html.Span(id="conn")]),
         html.Div(["Druck [Pa]: ", html.Span(id="pressure")]),
         html.Div(["Ausgang [%]: ", html.Span(id="output")]),
         html.Div(["Auto-Sollwert: ", html.Span(id="auto_sp")]),
         html.Div(["Modus: ", html.Span(id="mode")]),
         html.Div(["Heartbeat: ", html.Span(id="hb")]),
-        html.Div(["Status: ", html.Span(id="status")]),
         html.Hr(),
         html.Div(
             [
@@ -106,6 +147,7 @@ app.layout = html.Div(
     Output("mode", "children"),
     Output("hb", "children"),
     Output("status", "children"),
+    Output("conn", "children"),
     Input("tick", "n_intervals"),
 )
 def update_view(_):
@@ -113,6 +155,13 @@ def update_view(_):
         return f.format(v) if isinstance(v, (int, float)) else "—"
 
     mode_map = {1: "AUTO", 2: "HAND @SP", 3: "OFF", 4: "HAND @Output"}
+    with DRV_LOCK:
+        conn = (
+            f"{DRV.port}, ID {DRV.slave_id}, {DRV.client.baudrate}Bd, "
+            f"{DRV.client.parity}{DRV.client.stopbits}, FF={DRV.float_format}"
+        )
+    status_map = {"ok": "verbunden"}
+    status_txt = status_map.get(shared["status"], shared["status"])
     return (
         fmt(shared["pressure_pa"], "{:.1f}"),
         (fmt(shared["output_pct"], "{:.1f}") + " %")
@@ -121,7 +170,8 @@ def update_view(_):
         fmt(shared["auto_sp"], "{:.1f}"),
         mode_map.get(shared["mode"], "—"),
         shared["hb"] if isinstance(shared["hb"], int) else "—",
-        shared["status"],
+        status_txt,
+        conn,
     )
 
 
@@ -166,6 +216,58 @@ def set_hand(_, val):
 
 
 @app.callback(
+    Output("btn_connect", "n_clicks"),
+    Input("btn_connect", "n_clicks"),
+    State("cfg_port", "value"),
+    State("cfg_slave", "value"),
+    State("cfg_baud", "value"),
+    State("cfg_parity", "value"),
+    State("cfg_stopbits", "value"),
+    State("cfg_ff", "value"),
+    prevent_initial_call=True,
+)
+def reconnect(_, port, slave, baud, parity, stopbits, ff):
+    global DRV, CFG, poll_thread, stop_event
+    cfg = {
+        "PORT": port or CFG["PORT"],
+        "SLAVE_ID": int(slave) if slave is not None else CFG["SLAVE_ID"],
+        "BAUD": int(baud) if baud is not None else CFG["BAUD"],
+        "PARITY": parity or CFG["PARITY"],
+        "STOPBITS": int(stopbits) if stopbits is not None else CFG["STOPBITS"],
+        "BYTESIZE": CFG["BYTESIZE"],
+        "TIMEOUT": CFG["TIMEOUT"],
+        "FLOAT_FORMAT": int(ff) if ff is not None else CFG["FLOAT_FORMAT"],
+    }
+
+    stop_event.set()
+    if poll_thread is not None:
+        poll_thread.join()
+
+    with DRV_LOCK:
+        DRV.close()
+        DRV = VSensorDriver.from_cfg(cfg)
+        try:
+            DRV.connect()
+        except (PermissionError, FileNotFoundError) as exc:
+            shared["status"] = f"port err: {exc}"
+            poll_thread = None
+            stop_event = threading.Event()
+            return 0
+        except Exception as exc:  # pragma: no cover - init failure
+            shared["status"] = f"init err: {exc}"  # pragma: no cover
+            poll_thread = None
+            stop_event = threading.Event()
+            return 0
+
+    stop_event = threading.Event()
+    poll_thread = threading.Thread(target=poller, daemon=True)
+    poll_thread.start()
+    CFG.update(cfg)
+    shared["status"] = "ok"
+    return 0
+
+
+@app.callback(
     Output("btn_set_mode", "n_clicks"),
     Input("btn_set_mode", "n_clicks"),
     State("mode_dd", "value"),
@@ -198,6 +300,7 @@ if __name__ == "__main__":
         except Exception as exc:  # pragma: no cover - init failure
             shared["status"] = f"init err: {exc}"  # pragma: no cover
         else:
+            shared["status"] = "ok"
             poll_thread = threading.Thread(target=poller, daemon=True)
             poll_thread.start()
 
