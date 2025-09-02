@@ -283,6 +283,7 @@ app.layout = html.Div(
     prevent_initial_call=True,
 )
 def connect(_, __, port, slave, baud, parity, stopbits, ff, state):
+    global _client, CFG
     if not ctx.triggered_id:
         return state, True, 0, 0
     cfg = {
@@ -299,7 +300,6 @@ def connect(_, __, port, slave, baud, parity, stopbits, ff, state):
     if client is None:
         state = {"connected": False, "error": err}
         return state, True, 0, 0
-    global _client, CFG
     _client = client
     CFG.update(cfg)
     state = {"connected": True, "error": ""}
