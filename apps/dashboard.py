@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.DEBUG if os.getenv("VSENSOR_DEBUG") else loggi
 logger = logging.getLogger(__name__)
 
 # Defaults from environment
-CFG = asdict(Config.from_env())
+CFG = {k.upper(): v for k, v in asdict(Config.from_env()).items()}
 
 _client: Optional[VSensorClient] = None
 
