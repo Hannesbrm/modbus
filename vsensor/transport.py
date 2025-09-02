@@ -96,3 +96,31 @@ class RTUTransport(Transport):
                 self._client.close()
             finally:
                 pass
+
+
+class FakeTransport(Transport):
+    """In-memory transport used for simulations."""
+
+    def __init__(self, cfg: Config | None = None) -> None:
+        self._regs: dict[int, int] = {}
+        self._hb = 0
+
+    def read_holding_registers(self, address: int, count: int) -> List[int]:
+        try:
+            from . import registers as REG
+            if address == REG.HEARTBEAT - 1:
+                self._hb = (self._hb + 1) & 0xFFFF
+                self._regs[address] = self._hb
+        except Exception:  # pragma: no cover - optional
+            pass
+        return [self._regs.get(address + i, 0) for i in range(count)]
+
+    def write_register(self, address: int, value: int) -> None:
+        self._regs[address] = int(value)
+
+    def write_registers(self, address: int, values: Iterable[int]) -> None:
+        for i, v in enumerate(values):
+            self._regs[address + i] = int(v)
+
+    def close(self) -> None:  # pragma: no cover - nothing to do
+        pass

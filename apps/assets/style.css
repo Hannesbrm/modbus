@@ -125,3 +125,22 @@ body {
   text-align: center;
   margin-top: 1rem;
 }
+
+.alert-banner {
+  display: none;
+  background: #ffc107;
+  color: #212529;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.alert-banner.show {
+  display: flex;
+}
+
+.skeleton {
+  background: #eee;
+  color: transparent;
+}
