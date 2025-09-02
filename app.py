@@ -90,7 +90,6 @@ app.layout = html.Div(
             ]
         ),
         html.Div(["Status: ", html.Span(id="status")]),
-        html.Div(["Verbindung: ", html.Span(id="conn")]),
         html.Div(["Druck [Pa]: ", html.Span(id="pressure")]),
         html.Div(["Ausgang [%]: ", html.Span(id="output")]),
         html.Div(["Auto-Sollwert: ", html.Span(id="auto_sp")]),
@@ -147,7 +146,6 @@ app.layout = html.Div(
     Output("mode", "children"),
     Output("hb", "children"),
     Output("status", "children"),
-    Output("conn", "children"),
     Input("tick", "n_intervals"),
 )
 def update_view(_):
@@ -155,11 +153,6 @@ def update_view(_):
         return f.format(v) if isinstance(v, (int, float)) else "—"
 
     mode_map = {1: "AUTO", 2: "HAND @SP", 3: "OFF", 4: "HAND @Output"}
-    with DRV_LOCK:
-        conn = (
-            f"{DRV.port}, ID {DRV.slave_id}, {DRV.client.baudrate}Bd, "
-            f"{DRV.client.parity}{DRV.client.stopbits}, FF={DRV.float_format}"
-        )
     status_map = {"ok": "verbunden"}
     status_txt = status_map.get(shared["status"], shared["status"])
     return (
@@ -171,7 +164,6 @@ def update_view(_):
         mode_map.get(shared["mode"], "—"),
         shared["hb"] if isinstance(shared["hb"], int) else "—",
         status_txt,
-        conn,
     )
 
 
