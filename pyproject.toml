@@ -10,12 +10,11 @@ dependencies = [
     "pymodbus>=3.5",
 ]
 
-[tool.setuptools.packages.find]
-include = ["vsensor"]
-exclude = ["apps"]
+[tool.setuptools]
+packages = ["vsensor"]
 
 [project.scripts]
-vsensor = "main:main"
+vsensor = "vsensor.__main__:main"
 
 [tool.pytest.ini_options]
 addopts = "-q"

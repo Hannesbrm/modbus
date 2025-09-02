@@ -1,3 +1,5 @@
+"""Register definitions using 1-based Modbus addresses."""
+
 # 1-basierte Registeradressen gemäß Gerätedoku
 
 

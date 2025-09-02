@@ -43,31 +43,39 @@ class RTUTransport(Transport):
             stopbits=cfg.stopbits,
             bytesize=cfg.bytesize,
             timeout=cfg.timeout,
-            retries=2,
-            retry_on_empty=True,
-            retry_on_invalid=True,
             close_comm_on_error=True,
             framer=ModbusRtuFramer,  # type: ignore[arg-type]
         )
         self._slave_id = cfg.slave_id
         self._lock = threading.Lock()
+        self._retries = 3
         if not self._client.connect():
             raise TransportError(f"Serial connection failed on {cfg.port}")
 
     def _call(self, func, *args, **kwargs):
-        try:
-            result = func(*args, **kwargs, slave=self._slave_id)
-        except ModbusIOException as exc:
-            logger.debug("transport timeout: %s", exc)
-            raise TimeoutError("modbus timeout") from exc
-        except ModbusException as exc:
-            logger.debug("transport error: %s", exc)
-            raise TransportError(str(exc)) from exc
-        if result is None:
-            raise TimeoutError("modbus timeout")
-        if result.isError():
-            raise TransportError(str(result))
-        return result
+        for attempt in range(1, self._retries + 1):
+            try:
+                result = func(*args, **kwargs, slave=self._slave_id)
+            except ModbusIOException as exc:
+                logger.debug("transport timeout (attempt %s/%s): %s", attempt, self._retries, exc)
+                if attempt == self._retries:
+                    raise TimeoutError("modbus timeout") from exc
+                continue
+            except ModbusException as exc:
+                logger.debug("transport error (attempt %s/%s): %s", attempt, self._retries, exc)
+                if attempt == self._retries:
+                    raise TransportError(str(exc)) from exc
+                continue
+            if result is None:
+                if attempt == self._retries:
+                    raise TimeoutError("modbus timeout")
+                continue
+            if result.isError():
+                if attempt == self._retries:
+                    raise TransportError(str(result))
+                continue
+            return result
+        raise TransportError("modbus error")
 
     def read_holding_registers(self, address: int, count: int) -> List[int]:
         with self._lock:
