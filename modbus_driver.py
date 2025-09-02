@@ -4,12 +4,17 @@ from typing import Any
 from pymodbus.client import ModbusSerialClient
 from pymodbus.constants import Endian
 from pymodbus.exceptions import ModbusException, ModbusIOException
+from pymodbus.framer.rtu_framer import ModbusRtuFramer
 from pymodbus.payload import BinaryPayloadBuilder, BinaryPayloadDecoder
 
 import registers as REG
 
-BYTEORDER = Endian.LITTLE
-WORDORDER = Endian.BIG
+FLOAT_FORMATS = {
+    0: (Endian.BIG, Endian.BIG),
+    1: (Endian.LITTLE, Endian.BIG),
+    2: (Endian.BIG, Endian.LITTLE),
+    3: (Endian.LITTLE, Endian.LITTLE),
+}
 
 
 class VSensorDriver:
@@ -23,8 +28,9 @@ class VSensorDriver:
         parity: str = "N",
         stopbits: int = 1,
         bytesize: int = 8,
-        timeout: float = 1.0,
+        timeout: float = 1.5,
         slave_id: int = 1,
+        float_format: int = 1,
     ) -> None:
         self.client = ModbusSerialClient(
             port=port,
@@ -33,9 +39,18 @@ class VSensorDriver:
             stopbits=stopbits,
             bytesize=bytesize,
             timeout=timeout,
+            retries=2,
+            retry_on_empty=True,
+            retry_on_invalid=True,
+            close_comm_on_error=True,
+            framer=ModbusRtuFramer,
         )
         self.slave_id = slave_id
         self.port = port
+        self.float_format = int(float_format)
+        self.byteorder, self.wordorder = FLOAT_FORMATS.get(
+            self.float_format, FLOAT_FORMATS[1]
+        )
 
     @classmethod
     def from_cfg(cls, cfg: dict[str, Any]) -> "VSensorDriver":
@@ -47,6 +62,7 @@ class VSensorDriver:
             bytesize=cfg["BYTESIZE"],
             timeout=cfg["TIMEOUT"],
             slave_id=cfg["SLAVE_ID"],
+            float_format=cfg.get("FLOAT_FORMAT", 1),
         )
 
     def connect(self) -> None:
@@ -94,19 +110,22 @@ class VSensorDriver:
         )
 
     def read_float(self, addr_1_based: int) -> float:
-        rr = self._call(
-            self.client.read_holding_registers,
-            address=self._r(addr_1_based),
-            count=2,
-            slave=self.slave_id,
-        )
-        dec = BinaryPayloadDecoder.fromRegisters(
-            rr.registers, byteorder=BYTEORDER, wordorder=WORDORDER
-        )
-        return float(dec.decode_32bit_float())
+        for _ in range(3):
+            rr = self._call(
+                self.client.read_holding_registers,
+                address=self._r(addr_1_based),
+                count=2,
+                slave=self.slave_id,
+            )
+            if getattr(rr, "registers", None) and len(rr.registers) >= 2:
+                dec = BinaryPayloadDecoder.fromRegisters(
+                    rr.registers, byteorder=self.byteorder, wordorder=self.wordorder
+                )
+                return float(dec.decode_32bit_float())
+        raise RuntimeError("invalid float response")
 
     def write_float(self, addr_1_based: int, value: float) -> None:
-        b = BinaryPayloadBuilder(byteorder=BYTEORDER, wordorder=WORDORDER)
+        b = BinaryPayloadBuilder(byteorder=self.byteorder, wordorder=self.wordorder)
         b.add_32bit_float(float(value))
         regs = b.to_registers()
         self._call(
