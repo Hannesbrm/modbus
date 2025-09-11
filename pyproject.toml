@@ -17,7 +17,8 @@ packages = ["vsensor"]
 vsensor = "vsensor.__main__:main"
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q -m 'not hardware'"
+markers = ["hardware: tests requiring hardware"]
 
 [tool.ruff]
 line-length = 88
@@ -25,3 +26,5 @@ line-length = 88
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+strict = true
+files = ["vsensor"]

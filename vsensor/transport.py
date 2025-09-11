@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Iterable, List
+from typing import Any, Callable, Iterable, List
 
 from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ModbusIOException
-from pymodbus.framer.rtu_framer import ModbusRtuFramer
+from pymodbus.framer.rtu import FramerRTU
 
 from .config import Config
 from .errors import TimeoutError, TransportError
@@ -44,15 +44,15 @@ class RTUTransport(Transport):
             bytesize=cfg.bytesize,
             timeout=cfg.timeout,
             close_comm_on_error=True,
-            framer=ModbusRtuFramer,  # type: ignore[arg-type]
-        )
+            framer=FramerRTU,  # type: ignore[arg-type]
+        )  # type: ignore[call-arg]
         self._slave_id = cfg.slave_id
         self._lock = threading.Lock()
         self._retries = 3
         if not self._client.connect():
             raise TransportError(f"Serial connection failed on {cfg.port}")
 
-    def _call(self, func, *args, **kwargs):
+    def _call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         for attempt in range(1, self._retries + 1):
             try:
                 result = func(*args, **kwargs, slave=self._slave_id)
@@ -93,7 +93,7 @@ class RTUTransport(Transport):
     def close(self) -> None:
         with self._lock:
             try:
-                self._client.close()
+                self._client.close()  # type: ignore[no-untyped-call]
             finally:
                 pass
 

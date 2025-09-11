@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 
+import pytest
 from pymodbus.client import ModbusTcpClient
-from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, ModbusServerContext
-from pymodbus.server import StartTcpServer
 from pymodbus.exceptions import ModbusException, ModbusIOException
+from pymodbus.server import StartTcpServer
 
 from vsensor.client import VSensorClient
 from vsensor.config import Config
 from vsensor.transport import Transport
 
+datastore = pytest.importorskip("pymodbus.datastore")
+ModbusSequentialDataBlock = datastore.ModbusSequentialDataBlock  # type: ignore[attr-defined]
+ModbusServerContext = datastore.ModbusServerContext  # type: ignore[attr-defined]
+
+
+pytestmark = pytest.mark.hardware
+
+PORT = int(os.getenv("VSENSOR_TEST_PORT", "5020"))
+
 
 class TcpTransport(Transport):
-    def __init__(self, host: str = "localhost", port: int = 5020, slave_id: int = 1) -> None:
+    def __init__(self, host: str = "localhost", port: int = PORT, slave_id: int = 1) -> None:
         self._client = ModbusTcpClient(host=host, port=port)
         self._client.connect()
         self._slave_id = slave_id
@@ -48,9 +58,9 @@ class TcpTransport(Transport):
 
 
 def _start_server() -> None:
-    store = ModbusSlaveContext(hr=ModbusSequentialDataBlock(0, [0] * 1000))
+    store = ModbusSequentialDataBlock(0, [0] * 1000)
     context = ModbusServerContext(slaves=store, single=True)
-    StartTcpServer(context=context, address=("localhost", 5020))
+    StartTcpServer(context=context, address=("localhost", PORT))
 
 
 def test_integration_roundtrip() -> None:

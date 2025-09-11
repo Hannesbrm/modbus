@@ -8,10 +8,11 @@ from typing import List
 
 from .client import VSensorClient
 from .config import Config
+from .errors import VSensorError
 from .models import Mode
 
 
-def main(argv: List[str] | None = None) -> None:
+def main(argv: List[str] | None = None) -> int:
     """Run the vsensor command line interface."""
     logging.basicConfig(level=logging.INFO)
     env_cfg = Config.from_env()
@@ -64,26 +65,31 @@ def main(argv: List[str] | None = None) -> None:
     cfg.float_format = args.float_format
 
     client = VSensorClient(cfg)
-
-    if args.cmd == "read":
-        if args.what == "pressure":
-            print(client.read_pressure())
-        elif args.what == "output":
-            print(client.read_output())
-        elif args.what == "setpoint":
-            print(client.read_auto_setpoint())
-        elif args.what == "mode":
-            print(client.read_mode().name)
-        else:
-            print(client.read_telemetry())
-    elif args.cmd == "set":
-        if args.what == "mode":
-            client.set_mode(Mode(int(args.value)))
-        else:
-            client.set_auto_setpoint(float(args.value))
-
-    client.close()
+    try:
+        client.connect()
+        if args.cmd == "read":
+            if args.what == "pressure":
+                print(client.read_pressure())
+            elif args.what == "output":
+                print(client.read_output())
+            elif args.what == "setpoint":
+                print(client.read_auto_setpoint())
+            elif args.what == "mode":
+                print(client.read_mode().name)
+            else:
+                print(client.read_telemetry())
+        elif args.cmd == "set":
+            if args.what == "mode":
+                client.set_mode(Mode(int(args.value)))
+            else:
+                client.set_auto_setpoint(float(args.value))
+    except VSensorError as exc:
+        logging.error("%s", exc)
+        return 1
+    finally:
+        client.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

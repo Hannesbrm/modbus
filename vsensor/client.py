@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
-
-from pymodbus.constants import Endian
-from pymodbus.payload import BinaryPayloadBuilder, BinaryPayloadDecoder
+import struct
+from typing import Literal, Optional
 
 from . import registers as REG  # register constants are 1-based
 from .config import Config
@@ -17,11 +15,11 @@ from .transport import FakeTransport, RTUTransport, Transport
 
 logger = logging.getLogger(__name__)
 
-FLOAT_FORMATS = {
-    0: (Endian.BIG, Endian.BIG),
-    1: (Endian.LITTLE, Endian.BIG),
-    2: (Endian.BIG, Endian.LITTLE),
-    3: (Endian.LITTLE, Endian.LITTLE),
+FLOAT_FORMATS: dict[int, tuple[Literal["big", "little"], Literal["big", "little"]]] = {
+    0: ("big", "big"),
+    1: ("little", "big"),
+    2: ("big", "little"),
+    3: ("little", "little"),
 }
 
 
@@ -30,14 +28,18 @@ class VSensorClient:
 
     def __init__(self, cfg: Optional[Config] = None, transport: Optional[Transport] = None) -> None:
         self.cfg = cfg or Config.from_env()
-        if transport is not None:
-            self.transport = transport
-        elif os.getenv("VSENSOR_SIM") or os.getenv("VSENSOR_FAKE"):
+        self.transport = transport
+        ff = FLOAT_FORMATS.get(self.cfg.float_format, FLOAT_FORMATS[1])
+        self.byteorder, self.wordorder = ff
+
+    def connect(self) -> None:
+        """Initialise the transport lazily."""
+        if self.transport is not None:
+            return
+        if os.getenv("VSENSOR_SIM") or os.getenv("VSENSOR_FAKE"):
             self.transport = FakeTransport(self.cfg)
         else:
             self.transport = RTUTransport(self.cfg)
-        ff = FLOAT_FORMATS.get(self.cfg.float_format, FLOAT_FORMATS[1])
-        self.byteorder, self.wordorder = ff
 
     @staticmethod
     def _r(addr_1_based: int) -> int:
@@ -45,27 +47,28 @@ class VSensorClient:
         return addr_1_based - 1
 
     # ---- Low level ----
+    def _ensure_transport(self) -> Transport:
+        if self.transport is None:
+            raise VSensorError("not connected")
+        return self.transport
+
     def read_u16(self, addr_1_based: int) -> int:
-        regs = self.transport.read_holding_registers(self._r(addr_1_based), 1)
+        regs = self._ensure_transport().read_holding_registers(self._r(addr_1_based), 1)
         return int(regs[0])
 
     def write_u16(self, addr_1_based: int, value: int) -> None:
-        self.transport.write_register(self._r(addr_1_based), int(value))
+        self._ensure_transport().write_register(self._r(addr_1_based), int(value))
 
     def read_float(self, addr_1_based: int) -> float:
         for _ in range(3):
-            regs = self.transport.read_holding_registers(self._r(addr_1_based), 2)
+            regs = self._ensure_transport().read_holding_registers(self._r(addr_1_based), 2)
             if len(regs) >= 2:
-                dec = BinaryPayloadDecoder.fromRegisters(
-                    regs, byteorder=self.byteorder, wordorder=self.wordorder
-                )
-                return float(dec.decode_32bit_float())
+                return self._unpack_float(regs)
         raise VSensorError("invalid float response")
 
     def write_float(self, addr_1_based: int, value: float) -> None:
-        b = BinaryPayloadBuilder(byteorder=self.byteorder, wordorder=self.wordorder)
-        b.add_32bit_float(float(value))
-        self.transport.write_registers(self._r(addr_1_based), b.to_registers())
+        regs = self._pack_float(value)
+        self._ensure_transport().write_registers(self._r(addr_1_based), regs)
 
     # ---- High level ----
     def read_pressure(self) -> float:
@@ -96,4 +99,19 @@ class VSensorClient:
 
     def close(self) -> None:
         """Close the underlying transport."""
-        self.transport.close()
+        if self.transport is not None:
+            self.transport.close()
+
+    def _unpack_float(self, regs: list[int]) -> float:
+        words = regs if self.wordorder == "big" else list(reversed(regs))
+        raw = b"".join(int(w).to_bytes(2, self.byteorder) for w in words)
+        fmt = ">" if self.byteorder == "big" else "<"
+        return float(struct.unpack(fmt + "f", raw)[0])
+
+    def _pack_float(self, value: float) -> list[int]:
+        fmt = ">" if self.byteorder == "big" else "<"
+        raw = struct.pack(fmt + "f", float(value))
+        words = [int.from_bytes(raw[i : i + 2], self.byteorder) for i in (0, 2)]
+        if self.wordorder == "little":
+            words.reverse()
+        return words

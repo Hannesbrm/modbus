@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional
 
 from dash import Dash, Input, Output, State, dcc, html, ctx
@@ -16,13 +16,16 @@ from vsensor.config import Config
 from vsensor.errors import TimeoutError, TransportError, VSensorError
 
 
-logging.basicConfig(level=logging.DEBUG if os.getenv("VSENSOR_DEBUG") else logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Defaults from environment
-CFG = {k.upper(): v for k, v in asdict(Config.from_env()).items()}
 
-_client: Optional[VSensorClient] = None
+@dataclass
+class _Ctx:
+    cfg: dict[str, Any]
+    client: Optional[VSensorClient] = None
+
+
+CTX = _Ctx(cfg={k.upper(): v for k, v in asdict(Config.from_env()).items()})
 
 
 def _try_connect(cfg: dict[str, Any]) -> tuple[Optional[VSensorClient], str]:
@@ -31,6 +34,7 @@ def _try_connect(cfg: dict[str, Any]) -> tuple[Optional[VSensorClient], str]:
     for delay in (0.0, 0.2, 0.5):
         try:
             client = VSensorClient(Config(**cfg))
+            client.connect()
             return client, ""
         except Exception as exc:  # pragma: no cover - hardware specific
             err = str(exc)
@@ -43,18 +47,18 @@ def _call(
     state: dict[str, Any], func: Callable[[VSensorClient], Any]
 ) -> tuple[Any | None, dict[str, Any]]:
     """Call *func* with active client and handle errors."""
-    global _client
-    if not state.get("connected") or _client is None:
+    client = CTX.client
+    if not state.get("connected") or client is None:
         return None, {**state, "connected": False, "error": "Keine Verbindung"}
     try:
-        result = func(_client)
+        result = func(client)
         return result, {**state, "error": ""}
     except (TimeoutError, TransportError, VSensorError) as exc:
         logger.info("client error: %s", exc)
         try:
-            _client.close()
+            client.close()
         finally:
-            _client = None
+            CTX.client = None
         return None, {"connected": False, "error": str(exc)}
 
 
@@ -83,7 +87,7 @@ app.layout = html.Div(
                                 dcc.Input(
                                     id="cfg_port",
                                     type="text",
-                                    value=CFG["PORT"],
+                                    value=CTX.cfg["PORT"],
                                     placeholder="/dev/ttyUSB0",
                                 ),
                             ]
@@ -94,7 +98,7 @@ app.layout = html.Div(
                                 dcc.Input(
                                     id="cfg_slave",
                                     type="number",
-                                    value=CFG["SLAVE_ID"],
+                                    value=CTX.cfg["SLAVE_ID"],
                                     min=1,
                                     max=247,
                                     placeholder="1–247",
@@ -107,7 +111,7 @@ app.layout = html.Div(
                                 dcc.Input(
                                     id="cfg_baud",
                                     type="number",
-                                    value=CFG["BAUD"],
+                                    value=CTX.cfg["BAUDRATE"],
                                     min=1200,
                                     placeholder="9600",
                                 ),
@@ -119,7 +123,7 @@ app.layout = html.Div(
                                 dcc.Dropdown(
                                     id="cfg_parity",
                                     options=[{"label": p, "value": p} for p in ["N", "E", "O"]],
-                                    value=CFG["PARITY"],
+                                    value=CTX.cfg["PARITY"],
                                     clearable=False,
                                 ),
                             ]
@@ -130,7 +134,7 @@ app.layout = html.Div(
                                 dcc.Input(
                                     id="cfg_stopbits",
                                     type="number",
-                                    value=CFG["STOPBITS"],
+                                    value=CTX.cfg["STOPBITS"],
                                     min=1,
                                     max=2,
                                     placeholder="1",
@@ -143,7 +147,7 @@ app.layout = html.Div(
                                 dcc.Dropdown(
                                     id="cfg_ff",
                                     options=[{"label": str(i), "value": i} for i in range(4)],
-                                    value=CFG["FLOAT_FORMAT"],
+                                    value=CTX.cfg["FLOAT_FORMAT"],
                                     clearable=False,
                                 ),
                             ]
@@ -283,25 +287,24 @@ app.layout = html.Div(
     prevent_initial_call=True,
 )
 def connect(_, __, port, slave, baud, parity, stopbits, ff, state):
-    global _client, CFG
     if not ctx.triggered_id:
         return state, True, 0, 0
     cfg = {
-        "PORT": port or CFG["PORT"],
-        "SLAVE_ID": int(slave) if slave is not None else CFG["SLAVE_ID"],
-        "BAUD": int(baud) if baud is not None else CFG["BAUD"],
-        "PARITY": parity or CFG["PARITY"],
-        "STOPBITS": int(stopbits) if stopbits is not None else CFG["STOPBITS"],
-        "BYTESIZE": CFG["BYTESIZE"],
-        "TIMEOUT": CFG["TIMEOUT"],
-        "FLOAT_FORMAT": int(ff) if ff is not None else CFG["FLOAT_FORMAT"],
+        "PORT": port or CTX.cfg["PORT"],
+        "SLAVE_ID": int(slave) if slave is not None else CTX.cfg["SLAVE_ID"],
+        "BAUDRATE": int(baud) if baud is not None else CTX.cfg["BAUDRATE"],
+        "PARITY": parity or CTX.cfg["PARITY"],
+        "STOPBITS": int(stopbits) if stopbits is not None else CTX.cfg["STOPBITS"],
+        "BYTESIZE": CTX.cfg["BYTESIZE"],
+        "TIMEOUT": CTX.cfg["TIMEOUT"],
+        "FLOAT_FORMAT": int(ff) if ff is not None else CTX.cfg["FLOAT_FORMAT"],
     }
     client, err = _try_connect(cfg)
     if client is None:
         state = {"connected": False, "error": err}
         return state, True, 0, 0
-    _client = client
-    CFG.update(cfg)
+    CTX.client = client
+    CTX.cfg.update(cfg)
     state = {"connected": True, "error": ""}
     return state, False, 0, 0
 
@@ -334,7 +337,7 @@ def update_view(_, state):
         p, o, sp, mode, hb = values
         vals = [f"{p:.1f}", f"{o:.1f} %", f"{sp:.1f}", mode, hb]
     status = (
-        f"Verbunden – {CFG['PORT']}, ID {CFG['SLAVE_ID']}, FF {CFG['FLOAT_FORMAT']}"
+        f"Verbunden – {CTX.cfg['PORT']}, ID {CTX.cfg['SLAVE_ID']}, FF {CTX.cfg['FLOAT_FORMAT']}"
         if state.get("connected")
         else "Getrennt"
     )
@@ -433,7 +436,8 @@ def show_alert(state):
 
 
 if __name__ == "__main__":
-    app.run_server(
+    logging.basicConfig(level=logging.DEBUG if os.getenv("VSENSOR_DEBUG") else logging.INFO)
+    app.run(
         debug=False,
         use_reloader=False,
         host=os.getenv("HOST", "127.0.0.1"),
